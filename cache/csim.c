@@ -1,201 +1,201 @@
 #include "cachelab.h"
+#include <limits.h>
 #include <string.h>
-# include <stdio.h>
-# include <stdlib.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+
+#define True 1
+#define False !True
+#define Hit 1
+#define Miss 0
+#define Evict -1
 /*
 name: 朱文杰
 ID: ics517021910799
 */
-int hitn=0, missn=0, evictn=0;
 
-enum Bool{
-    True=1,
-    False=!True
-};
 
-enum HitFlag{
-    Hit=1,
-    Miss=0,
-    Evict=-1
-};
 
-//正确写法是MTF，不过C写起来太累了，这里直接记录最后一次访问的位次n，然后遍历集找n最小的地方,时间复杂度O(e)。
-int visittime=0;
+int hitn = 0, missn = 0, evictn = 0;
+//正确写法是MTF，这里直接记录最后一次访问的位次n，然后遍历集找n最小的地方,时间复杂度O(e)。
+int visittime = 0;
 
-typedef struct Information
+struct Info
 {
-    char verbose;
     char* file;
-    size_t s;
-    size_t E;
-    size_t b;
-} Info;
+    unsigned long s;
+    unsigned long E;
+    unsigned long b;
+};
 
-Info ParseShell(int argc, char* argv[])
+struct Info* ParseShell(int argc, char* argv[])
 {
-    Info info;
-    if(argc==10){
-        //verbose
-        info.verbose=True;
-        info.file=argv[9];
-        info.s=atoi(argv[3]);
-        info.E=atoi(argv[5]);
-        info.b=atoi(argv[7]);
-    }
-    else if(argc==9){
-        //normal
-        info.verbose=False;
-        info.file=argv[8];
-        info.s=atoi(argv[2]);
-        info.E=atoi(argv[4]);
-        info.b=atoi(argv[6]);
-    }
-    else{
-        printf("Wrong params!");
-    }
+    struct Info * info = (struct Info*)malloc(sizeof(struct Info));
+    info->file = argv[8];
+    info->s = atoi(argv[2]);
+    info->E = atoi(argv[4]);
+    info->b = atoi(argv[6]);
     return info;
 }
 
-size_t GetBlockIndex(size_t address,Info* info)
+unsigned long GetSetIndex(unsigned long address, struct Info* info)
 {
-    return address & (2<<(info->b-1));//取后b位
+    return (address & ((0x1 << (info->s+ info->b)) - 1)) >> info->b;//取中间s位
 }
 
-size_t GetSetIndex(size_t address,Info* info)
+unsigned long GetTag(unsigned long address, struct Info* info)
 {
-    return address>>info->b & (2<<(info->s-1));//取中间s位
+    return  address >> (info->b + info->s);//取前32-b-s位
 }
 
-size_t GetTag(size_t address,Info* info)
+struct Line {
+    unsigned long visit;
+    unsigned long b;
+    unsigned long tag;
+    int valid;
+    char* blocks;//vector
+};
+
+struct Set {
+    unsigned long e;
+    struct Line* lines;//list
+};
+
+struct Cache {
+    unsigned long s;
+    struct Set* sets;//vector
+};
+
+
+void GenerateLine(struct Line* ret, unsigned long b)
 {
-    return address>>(info->b+info->s);//取前32-b-s位
+    ret->visit = 0;
+    ret->b = b;
+    ret->tag = 0;
+    ret->valid = False;
+    ret->blocks = (char*)(malloc(1 << b));
 }
 
-typedef unsigned char byte;
-
-typedef struct Line{
-    size_t visit;
-    size_t b;
-    size_t tag;
-    Bool valid;
-    byte* blocks;//vector
-}Line;
-
-typedef struct Set{
-    size_t e;
-    Line* lines;//list
-}Set;
-
-typedef struct Cache{
-    size_t s;
-    Set* sets;//vector
-}Cache;
-
-
-void GenerateLine(Line* ret,size_t b)
-{
-    ret->visit=0;
-    ret->b=b;
-    ret->tag=0;
-    ret->valid=False;
-    ret->blocks=byte*(malloc(b));
-}
-
-void GenerateSet(Set* ret , size_t e, size_t b)
+void GenerateSet(struct Set* ret, unsigned long e, unsigned long b)
 {
     ret->e = e;
-    ret->lines=Line*(malloc(sizeof(Line)*e));
-    for(int i=0; i<e; i++)
-        GenerateLine(ret->lines[i],b);
+    ret->lines = (struct Line*)(malloc(sizeof(struct Line)*e));
+    for (int i = 0; i<e; i++)
+        GenerateLine(&ret->lines[i], b);
 }
 
-Cache* GenerateCache(size_t s, size_t e, size_t b)
+struct Cache* GenerateCache(unsigned long s, unsigned long e, unsigned long b)
 {
-    Cache* cache=Cache*(malloc(sizeof(Cache)));
-    cache->s= s;
-    cache->sets= Set*(malloc(sizeof(Set)*s));
-    for(int i=0; i<s; i++)
-        GenerateSet(cache->sets[i],e,b);
+    struct Cache* cache = (struct Cache*)(malloc(sizeof(struct Cache)));
+    cache->s = s;
+    int size = 1 << s;
+    cache->sets = (struct Set*)(malloc(sizeof(struct Set)*size));
+    for (int i = 0; i<size; i++)
+        GenerateSet(&cache->sets[i], e, b);
     return cache;
 }
-
-Line* GetLRU(Set* set, size_t e){
-    int cur=0, minv=0, mini=0;
-    for(int i=0;i<e;i++){
-        cur=set->lines[i].visit;
-        if(cur<minv){
-            mini=i;
-            minv=cur;
+struct Line* GetLRU(struct Set* set, unsigned long e) {
+    int cur = 0, minv = INT_MAX, mini = -1;
+    for (int i = 0; i<e; i++) {
+        cur = set->lines[i].visit;
+        if (cur<minv) {
+            mini = i;
+            minv = cur;
         }
     }
-    return set->lines[mini];
+    return &set->lines[mini];
 }
 
-int checkHit(size_t address, Line* line)
-{   
-    //更新访问的次数，默认是0，故在冷miss时，会从前往后开始占用。
+int checkHit(struct Info* info, unsigned long address, struct  Line* line)
+{
     visittime++;
-    line->visit=visittime;
-    int tag=GetBlockIndex(address,info);
-    if(line->valid==True)
+    line->visit = visittime;
+    int tag = GetTag(address, info);
+    if (line->valid == True)
     {
-        if(line->tag==tag)
-        return Hit;//hit
-        else{
-            line->tag=tag;
-            return Evict;//evict
+        if (line->tag == tag)
+            return Hit;//hit
+        else {
+            line->tag = tag;
+            return Evict;//evict and miss
         }
     }
     else{
-        line->tag=tag;//miss
-        line->valid=True;
+        line->tag = tag;//miss
+        line->valid = True;
         return Miss;
     }
 }
 
-int visit(Info* info, Cache* cache, size_t address)
+int visit(struct Info* info, struct Cache* cache, unsigned long address)
 {
-    int si=GetSetIndex(address,info);
-    Set* curset= cache->sets[si];
-    Line* curline= GetLRU(curset,info->E);
-    return checkHit(address,curline);
+    int si = GetSetIndex(address, info);
+    struct Set* curset = &cache->sets[si];
+    struct Line* curline;
+    //hit
+    for (int i = 0; i < info->E; i++)
+    {
+        curline = &curset->lines[i];
+        if (curline->valid == True && curline->tag == GetTag(address, info))
+            return checkHit(info, address, curline);
+    }
+    //miss
+    for (int i = 0; i < info->E; i++)
+    {
+        curline = &curset->lines[i];
+        if (curline->valid == False)
+            return checkHit(info, address, curline);
+    }
+    //evict
+    curline = GetLRU(curset, info->E);
+    return checkHit(info, address, curline);
 }
 
-void ParseFlag(HitFlag flag)
+void ParseFlag(int flag)
 {
-    switch(flag)
+    switch (flag)
     {
-        case Evict:
+    case Evict:
         evictn++;
-        printf("eviction ");
-        return;
-        case Miss:
         missn++;
-        printf("miss ");
+        //printf("miss eviction ");
         return;
-        case Hit:
+    case Miss:
+        missn++;
+        //printf("miss ");
+        return;
+    case Hit:
         hitn++;
-        printf("hit ");
+        //printf("hit ");
     }
 }
 
-void ParseInstruction(Info* info, Cache*cache, char* ins[])
+void ParseInstruction(struct Info* info, struct Cache*cache, char op, long address, int size)
 {
-    size_t address= atoi(ins[1]);
-if(strcmp(ins[0],"L")==0 || strcmp(ins[0],"S")==0){
-    ParseFlag(visit(info, cache, address));
-}
-else if(strcmp(ins[0],"M")){
-    ParseFlag(visit(info, cache, address));
-    ParseFlag(visit(info, cache, address));
-}
-else return;
+    if (op == 'L' || op == 'S') {
+        ParseFlag(visit(info, cache, address));
+    }
+    else if (op == 'M') {
+        ParseFlag(visit(info, cache, address));
+        ParseFlag(visit(info, cache, address));
+    }
+    else return;
 }
 
 
-int main(int argc,char *argv[]) 
+int main(int argc, char *argv[])
 {
-    Info info= ParseShell(argc,argv);
-    printSummary(hit, miss, evict);
-    return 0;
+    struct Info*  info = ParseShell(argc, argv);
+    freopen(info->file, "r", stdin);
+    struct Cache* cache = GenerateCache(info->s, info->E, info->b);
+    char op;
+    long addr;
+    int size;
+    while (scanf("%c %lx,%x", &op, &addr, &size) != EOF)
+    {
+        printf("%c %lx,%x ", op, addr, size);
+        ParseInstruction(info, cache, op, addr, size);
+    }
+    printSummary(hitn, missn, evictn);
 }
