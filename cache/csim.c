@@ -10,17 +10,20 @@
 #define Hit 1
 #define Miss 0
 #define Evict -1
+
 /*
 name: 朱文杰
 ID: ics517021910799
 */
 
 
-
+//记录内存访问状态次数
 int hitn = 0, missn = 0, evictn = 0;
+
 //正确写法是MTF，这里直接记录最后一次访问的位次n，然后遍历集找n最小的地方,时间复杂度O(e)。
 int visittime = 0;
 
+//存储信息
 struct Info
 {
     char* file;
@@ -28,7 +31,7 @@ struct Info
     unsigned long E;
     unsigned long b;
 };
-
+//获取命令行参数
 struct Info* ParseShell(int argc, char* argv[])
 {
     struct Info * info = (struct Info*)malloc(sizeof(struct Info));
@@ -38,17 +41,18 @@ struct Info* ParseShell(int argc, char* argv[])
     info->b = atoi(argv[6]);
     return info;
 }
-
+//获取集合索引
 unsigned long GetSetIndex(unsigned long address, struct Info* info)
 {
     return (address & ((0x1 << (info->s+ info->b)) - 1)) >> info->b;//取中间s位
 }
-
+//获取标签
 unsigned long GetTag(unsigned long address, struct Info* info)
 {
     return  address >> (info->b + info->s);//取前32-b-s位
 }
 
+//模拟一行
 struct Line {
     unsigned long visit;
     unsigned long b;
@@ -57,17 +61,19 @@ struct Line {
     char* blocks;//vector
 };
 
+//模拟一个集合
 struct Set {
     unsigned long e;
     struct Line* lines;//list
 };
 
+//模拟cache
 struct Cache {
     unsigned long s;
     struct Set* sets;//vector
 };
 
-
+//行的构造函数
 void GenerateLine(struct Line* ret, unsigned long b)
 {
     ret->visit = 0;
@@ -76,7 +82,7 @@ void GenerateLine(struct Line* ret, unsigned long b)
     ret->valid = False;
     ret->blocks = (char*)(malloc(1 << b));
 }
-
+//集合的构造函数
 void GenerateSet(struct Set* ret, unsigned long e, unsigned long b)
 {
     ret->e = e;
@@ -84,7 +90,7 @@ void GenerateSet(struct Set* ret, unsigned long e, unsigned long b)
     for (int i = 0; i<e; i++)
         GenerateLine(&ret->lines[i], b);
 }
-
+//cache的构造函数
 struct Cache* GenerateCache(unsigned long s, unsigned long e, unsigned long b)
 {
     struct Cache* cache = (struct Cache*)(malloc(sizeof(struct Cache)));
@@ -95,6 +101,7 @@ struct Cache* GenerateCache(unsigned long s, unsigned long e, unsigned long b)
         GenerateSet(&cache->sets[i], e, b);
     return cache;
 }
+//获取LRU行的指针
 struct Line* GetLRU(struct Set* set, unsigned long e) {
     int cur = 0, minv = INT_MAX, mini = -1;
     for (int i = 0; i<e; i++) {
@@ -106,7 +113,7 @@ struct Line* GetLRU(struct Set* set, unsigned long e) {
     }
     return &set->lines[mini];
 }
-
+//检查内存访问状态
 int checkHit(struct Info* info, unsigned long address, struct  Line* line)
 {
     visittime++;
@@ -128,6 +135,7 @@ int checkHit(struct Info* info, unsigned long address, struct  Line* line)
     }
 }
 
+//模拟内存访问，首先看是否击中。
 int visit(struct Info* info, struct Cache* cache, unsigned long address)
 {
     int si = GetSetIndex(address, info);
@@ -152,6 +160,7 @@ int visit(struct Info* info, struct Cache* cache, unsigned long address)
     return checkHit(info, address, curline);
 }
 
+//根据内存访问状态得到对应响应
 void ParseFlag(int flag)
 {
     switch (flag)
@@ -171,6 +180,7 @@ void ParseFlag(int flag)
     }
 }
 
+//解析内存指令
 void ParseInstruction(struct Info* info, struct Cache*cache, char op, long address, int size)
 {
     if (op == 'L' || op == 'S') {
@@ -183,7 +193,22 @@ void ParseInstruction(struct Info* info, struct Cache*cache, char op, long addre
     else return;
 }
 
+//GC
+void clean(struct Info* info, struct Cache* cache){
+    for(int i=0;i<info->s; i++){
+        for(int j=0; j<info->E; j++){
+                free(cache->sets[i].lines[j].blocks);
+        }
+        free(cache->sets[i].lines);
+    }
+    free(cache->sets);
+    free(cache);
+}
 
+//先命令行
+//再初始化
+//然后处理输入
+//最后输出结果并GC
 int main(int argc, char *argv[])
 {
     struct Info*  info = ParseShell(argc, argv);
@@ -197,5 +222,6 @@ int main(int argc, char *argv[])
         printf("%c %lx,%x ", op, addr, size);
         ParseInstruction(info, cache, op, addr, size);
     }
+    clean(info,cache);
     printSummary(hitn, missn, evictn);
 }
